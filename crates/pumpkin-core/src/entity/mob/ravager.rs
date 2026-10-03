@@ -1,11 +1,15 @@
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::sound::Sound;
+use pumpkin_data::tag::{self, Taggable};
 use pumpkin_nbt::compound::NbtCompound;
+use pumpkin_util::math::position::BlockPos;
+use pumpkin_world::world::BlockFlags;
 
 use crate::entity::{
-    Entity,
+    Entity, EntityBase,
     ai::goal::{
         active_target::ActiveTargetGoal, look_around::RandomLookAroundGoal,
         look_at_entity::LookAtEntityGoal, melee_attack::MeleeAttackGoal, swim::SwimGoal,
@@ -103,6 +107,36 @@ impl Mob for RavagerEntity {
 
     fn mob_read_nbt(&self, nbt: &NbtCompound) {
         self.read_raider_nbt(nbt);
+    }
+
+    /// The leaf breaking part of vanilla `Ravager.aiStep`.
+    fn mob_tick(&self, _caller: &dyn EntityBase) {
+        let living_entity = &self.mob_entity.living_entity;
+        let entity = &living_entity.entity;
+        let world = entity.world.load();
+        if !entity.is_alive()
+            || !entity.horizontal_collision.load(Ordering::Relaxed)
+            || !world.level_info.load().game_rules.mob_griefing
+        {
+            return;
+        }
+
+        let bounding_box = entity.bounding_box.load().expand(0.2, 0.2, 0.2);
+        let mut destroyed_block = false;
+        for pos in BlockPos::iterate(
+            BlockPos::floored_v(bounding_box.min),
+            BlockPos::floored_v(bounding_box.max),
+        ) {
+            if world.get_block(&pos).has_tag(&tag::Block::MINECRAFT_LEAVES) {
+                destroyed_block |= world
+                    .break_block(&pos, None, BlockFlags::NOTIFY_ALL)
+                    .is_some();
+            }
+        }
+
+        if !destroyed_block && entity.on_ground.load(Ordering::Relaxed) {
+            living_entity.jump();
+        }
     }
 }
 
